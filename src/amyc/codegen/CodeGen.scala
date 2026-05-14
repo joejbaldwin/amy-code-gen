@@ -105,8 +105,30 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module]:
 
         case Equals(lhs, rhs) => cgExpr(lhs) <:> cgExpr(rhs) <:> Eq
 
+        case AmyAnd(lhs, rhs) =>
+            cgExpr(lhs) <:> If_i32 <:> cgExpr(rhs) <:> Else <:> Const(0) <:> End
+
+        case AmyOr(lhs, rhs) =>
+          cgExpr(lhs) <:> If_i32 <:> Const(1) <:> Else <:> cgExpr(rhs) <:> End
+        
+        case Variable(name) => // get the variable value from the corresponding local
+          GetLocal(locals(name))
+
+        case Ite(cond, thenn, elze) =>
+          cgExpr(cond) <:> If_i32 <:> cgExpr(thenn) <:> Else <:> cgExpr(elze) <:> End
+
+
+        case Sequence(expr1, expr2) =>
+          cgExpr(expr1) <:> Drop <:> cgExpr(expr2)
+
+        case Let(df, value, body) =>
+          val local_index = lh.getFreshLocal()
+          cgExpr(value) <:>
+          SetLocal(local_index) <:>
+          cgExpr(body)(using locals + (df.name -> local_index))
+
     case _ => ??? 
-       
+
     Module(
       program.modules.last.name.name,
       defaultImports,
