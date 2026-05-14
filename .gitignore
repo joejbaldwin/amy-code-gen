@@ -1,0 +1,27 @@
+# sbt
+target/
+project/target/
+project/project/
+
+# IDE
+.idea/
+.vscode/
+.metals/
+.bloop/
+.bsp/
+.scala-build/
+
+# wasm output
+wasmout/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Misc
+*.class
+*.log
+
+EdgeCases.amy
+PROJECT_STATEMENT.txt
+AMY_TO_WEBASSEMBLY.txt
