@@ -1,0 +1,3 @@
+﻿object Oops
+  error("oops")
+end Oops

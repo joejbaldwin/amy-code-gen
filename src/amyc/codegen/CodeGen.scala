@@ -126,7 +126,54 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module]:
           cgExpr(value) <:>
           SetLocal(local_index) <:>
           cgExpr(body)(using locals + (df.name -> local_index))
+          
+        case StringLiteral(s) => // already given 
+            mkString(s)
 
+        case Concat(lhs, rhs) =>
+            cgExpr(lhs) <:>
+            cgExpr(rhs) <:>
+            Call("String_concat")
+
+        case Error(msg) =>
+          mkString("Error: ") <:>
+          cgExpr(msg) <:>
+          Call("String_concat") <:>
+          Call("Std_printString") <:>
+          Unreachable
+
+
+        case AmyCall(qname, args) =>
+            table.getFunction(qname) match
+              case Some(function_signature) =>
+                // Function call: push args in order, then call by name
+                (args.map(cgExpr): Code) <:>
+                Call(fullName(function_signature.owner, qname))
+
+              case None =>
+                // not a function, so it must be a constructor.
+                table.getConstructor(qname) match
+                  case Some(constructor_signature) =>
+                    // allocate the ADT on the heap.
+                    val abstractDataType_base = lh.getFreshLocal()
+                    val mem_size = (1 + args.size) * 4
+
+                    // Save old boundary, which is the base address of the new ADT
+                    GetGlobal(memoryBoundary) <:> SetLocal(abstractDataType_base) <:>
+                    // so nested allocs don't overlap
+                    GetGlobal(memoryBoundary) <:> Const(mem_size) <:> Add <:> SetGlobal(memoryBoundary) <:>
+                    // Write constructor index at base+0
+                    GetLocal(abstractDataType_base) <:> Const(constructor_signature.index) <:> Store <:>
+                    // Write each field: address = base + 4*(i+1), value = cgExpr(arg)
+                    args.zipWithIndex.foldLeft(Code(Nil)) { case (acc, (arg, i)) =>
+                      acc <:>
+                      GetLocal(abstractDataType_base) <:> adtField(i) <:> cgExpr(arg) <:> Store
+                    } <:>
+                    // Return the base address
+                    GetLocal(abstractDataType_base)
+
+                  case None =>
+                    Unreachable        
     case _ => ??? 
 
     Module(
