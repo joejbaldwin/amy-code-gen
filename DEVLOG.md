@@ -19,4 +19,22 @@ Implemented the Call case, which handles both function calls and constructor cal
 
 For a normal function call i push all the arguments onto the stack left-to-right, then emit a wasm call instruction using the function's name
 
-For a constructor call: we need to build the ADT in heap memory manually. Save the current memory boundary as the base address, bump the boundary forward by (1 + number of fields) * 4 bytes to reserve space, store the constructor's index at the base, then store each field value at base + 4*(i+1). Finally push the base address as the "value" of this ADT. We distinguish functions from constructors by checking the symbol table.
+For a constructor call: we need to build the ADT in heap memory manually. Save the current memory boundary as the base address, bump the boundary forward by (1 + number of fields) * 4 bytes to reserve space, store the constructor's index at the base, then store each field value at base + 4*(i+1). Finally push the base address as the "value" of this ADT. We distinguish functions from constructors by checking the symbol table. 
+I used a loop instead of map so i can read it better, maps where confusing me.
+
+Session 5
+
+Implementing match
+
+Every matchAndBind produces wasm code that when run must follow this rule:
+Input (precondition): the scrutinee value is on top of the wasm stack.
+Output (postcondition): the scrutinee has been consumed, and exactly one of these is on the stack:
+
+1 if the pattern matched
+0 if it didn't
+ 
+wildcard is easy just drop the scrut and push 1 to stack
+
+case class is harder. The scrutinee is on the stack and it's a memory address pointing to an ADT instance laid out as [index, field_0, field_1, …]
+
+i need to check the constructor index matches and if yes, recursively check each subpattern against the corresponding field.

@@ -73,6 +73,51 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module]:
               // Let the code generation of the expression which corresponds to this pattern
               // know that the bound id is at local idLocal.
               Map(id -> idLocal))
+
+            case WildcardPattern =>
+              // consume and add 1 (match anything)
+              (Drop <:> Const(1), Map.empty) // no bindings
+
+            case LiteralPattern(lit) =>
+              ( cgExpr(lit) <:> Eq,   // push literal value then check equality
+                Map.empty )           
+
+            case CaseClassPattern(constr, subPatterns) =>
+              val constructor_sig = table.getConstructor(constr).get
+              val scrut_addr = lh.getFreshLocal()
+
+              // save scrut adress to use multiple times
+              // Stack:[scrutAddr]
+              val saveScrut = SetLocal(scrut_addr)
+              // Stack after: []
+
+              // Check the constructor index
+              val checkIndex: Code =
+                GetLocal(scrut_addr) <:> Load <:>     // load index from offset 0
+                Const(constructor_sig.index) <:>           // push expected index
+                Eq                                   // compare it 0 or 1
+
+              
+              var field_checks: Code = Code(Nil)
+              var field_bindings: Map[Identifier, Int] = Map.empty
+              var i = 0
+              for sub_pattern <- subPatterns do
+                val (subCode, sub_bindings) = matchAndBind(sub_pattern)
+                // For each field: load it, then run subpattern's check
+                // After loading, the field value is on the stack — exactly the precondition for subCode
+                field_checks = field_checks <:>
+                  // AND with the previous result: if already 0, skip; else evaluate subpattern
+                  If_i32 <:>
+                    GetLocal(scrut_addr) <:> adtField(i) <:> Load <:>  // load field i
+                    subCode <:>                                        // run subpattern check
+                  Else <:>
+                    Const(0) <:>
+                  End
+                field_bindings = field_bindings ++ sub_bindings
+                i = i + 1
+
+              ( saveScrut <:> checkIndex <:> field_checks,
+                field_bindings )
             
             case _ => ???
 
@@ -143,37 +188,53 @@ object CodeGen extends Pipeline[(Program, SymbolTable), Module]:
           Unreachable
 
 
-        case AmyCall(qname, args) =>
-            table.getFunction(qname) match
-              case Some(function_signature) =>
-                // Function call: push args in order, then call by name
-                (args.map(cgExpr): Code) <:>
-                Call(fullName(function_signature.owner, qname))
+    case AmyCall(qname, args) =>
+       table.getFunction(qname) match
+    case Some(function_signature) =>
+      // Function call: push args in order, then call by name
+      // compile each argument into wasm code.
+      var argsCode: Code = Code(Nil)  // start with empty code
+      for arg <- args do
+        argsCode = argsCode <:> cgExpr(arg)
+      
+      argsCode <:> Call(fullName(function_signature.owner, qname))
 
-              case None =>
-                // not a function, so it must be a constructor.
-                table.getConstructor(qname) match
-                  case Some(constructor_signature) =>
-                    // allocate the ADT on the heap.
-                    val abstractDataType_base = lh.getFreshLocal()
-                    val mem_size = (1 + args.size) * 4
+    case None =>
+      // not a function, so it must be a constructor.
+      table.getConstructor(qname) match
+        case Some(constructor_signature) =>
+          // allocate the ADT on the heap.
+          val abstractDataType_base = lh.getFreshLocal()
+          val mem_size = (1 + args.size) * 4
 
-                    // Save old boundary, which is the base address of the new ADT
-                    GetGlobal(memoryBoundary) <:> SetLocal(abstractDataType_base) <:>
-                    // so nested allocs don't overlap
-                    GetGlobal(memoryBoundary) <:> Const(mem_size) <:> Add <:> SetGlobal(memoryBoundary) <:>
-                    // Write constructor index at base+0
-                    GetLocal(abstractDataType_base) <:> Const(constructor_signature.index) <:> Store <:>
-                    // Write each field: address = base + 4*(i+1), value = cgExpr(arg)
-                    args.zipWithIndex.foldLeft(Code(Nil)) { case (acc, (arg, i)) =>
-                      acc <:>
-                      GetLocal(abstractDataType_base) <:> adtField(i) <:> cgExpr(arg) <:> Store
-                    } <:>
-                    // Return the base address
-                    GetLocal(abstractDataType_base)
+          // Write each field: address = base + 4*(i+1), value = cgExpr(arg)
+          var writeFields: Code = Code(Nil)
+          var i = 0
+          for arg <- args do
+            val oneField: Code =
+              GetLocal(abstractDataType_base) <:>
+              adtField(i) <:>
+              cgExpr(arg) <:>
+              Store
+            writeFields = writeFields <:> oneField
+            i = i + 1
 
-                  case None =>
-                    Unreachable        
+          // Save old boundary, which is the base address of the new ADT
+          GetGlobal(memoryBoundary) <:> SetLocal(abstractDataType_base) <:>
+          // so nested allocs don't overlap
+          GetGlobal(memoryBoundary) <:> Const(mem_size) <:> Add <:> SetGlobal(memoryBoundary) <:>
+          // write the constructor index at offset 0 from base.
+          GetLocal(abstractDataType_base) <:> Const(constructor_signature.index) <:> Store <:>
+          writeFields <:>
+          // Return the base address
+          GetLocal(abstractDataType_base)
+
+        case None =>
+          // Unreachable: name analysis guarantees this is a function or constructor.
+          Unreachable
+
+
+               
     case _ => ??? 
 
     Module(
